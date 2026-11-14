@@ -26,6 +26,7 @@ class AudioSource:
         self.channels = 2
         self.rate = OUT_RATE
         self.error = None
+        self.pcm_listener = None  # optional callable(raw_bytes, rate, channels)
 
     def start(self):
         self.stop()
@@ -41,9 +42,14 @@ class AudioSource:
             self.channels = max(1, int(dev["maxInputChannels"]))
             self.rate = int(dev["defaultSampleRate"])
             self._stream = self._pa.open(
-                format=pyaudio.paInt16, channels=self.channels, rate=self.rate,
-                input=True, input_device_index=dev["index"],
-                frames_per_buffer=1024, stream_callback=self._callback)
+                format=pyaudio.paInt16,
+                channels=self.channels,
+                rate=self.rate,
+                input=True,
+                input_device_index=dev["index"],
+                frames_per_buffer=1024,
+                stream_callback=self._callback,
+            )
             self.error = None
         except Exception as e:  # noqa: BLE001
             self.error = str(e)
@@ -65,13 +71,20 @@ class AudioSource:
             self.chunks.clear()
 
     def _callback(self, in_data, frame_count, time_info, status):
+        if self.pcm_listener:
+            try:
+                self.pcm_listener(in_data, self.rate, self.channels)
+            except Exception:  # noqa: BLE001
+                pass
+
         ts = time.monotonic()
-        data = np.frombuffer(in_data, dtype=np.int16).astype(np.float32) / 32768.0
+        data = np.frombuffer(in_data, dtype=np.int16).astype(np.float32) * (1.0 / 32768.0)
         data = data.reshape(-1, self.channels)
         if self.channels == 1:
             data = np.repeat(data, 2, axis=1)
         else:
             data = data[:, :2]
+
         with self._lock:
             self.chunks.append((ts, data, self.rate))
             while self.chunks and self.chunks[0][0] < ts - self.max_seconds - 2:
@@ -79,12 +92,12 @@ class AudioSource:
         return (None, pyaudio.paContinue)
 
     def render(self, t0: float, t1: float, volume: float) -> np.ndarray:
-        """Place chunks on a continuous OUT_RATE timeline (silence fills gaps;
-        WASAPI loopback delivers nothing while the desktop is silent)."""
+        """Place chunks on a continuous OUT_RATE timeline."""
         n = max(1, int((t1 - t0) * OUT_RATE))
         out = np.zeros((n, 2), dtype=np.float32)
         with self._lock:
             chunks = list(self.chunks)
+
         for end_ts, data, rate in chunks:
             if rate != OUT_RATE:
                 m = int(len(data) * OUT_RATE / rate)
@@ -93,6 +106,7 @@ class AudioSource:
                 x_old = np.linspace(0, 1, len(data), endpoint=False)
                 x_new = np.linspace(0, 1, m, endpoint=False)
                 data = np.stack([np.interp(x_new, x_old, data[:, c]) for c in range(2)], axis=1)
+
             dur = len(data) / OUT_RATE
             start = int((end_ts - dur - t0) * OUT_RATE)
             a, b = max(start, 0), min(start + len(data), n)
@@ -100,4 +114,3 @@ class AudioSource:
                 continue
             out[a:b] += data[a - start:b - start] * volume
         return out
-

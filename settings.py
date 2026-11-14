@@ -1,7 +1,7 @@
 """Persistent user settings for Screen Clipper."""
 import json
 import os
-from dataclasses import dataclass, asdict, fields
+from dataclasses import asdict, dataclass, field, fields
 
 APP_NAME = "ScreenClipper"
 APPDATA_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), APP_NAME)
@@ -15,6 +15,14 @@ QUALITY_CRF = {"Low": 28, "Medium": 23, "High": 18}
 
 def default_save_dir() -> str:
     return os.path.join(os.path.expanduser("~"), "Videos", APP_NAME)
+
+
+def default_voice_triggers() -> list:
+    return [
+        {"phrase": "clip that", "duration": 30, "enabled": True},
+        {"phrase": "save clip", "duration": 15, "enabled": True},
+        {"phrase": "what a shot", "duration": 45, "enabled": True},
+    ]
 
 
 @dataclass
@@ -37,9 +45,15 @@ class Settings:
     notify: bool = True
     sound: bool = True
 
+    # Voice clipping settings
+    voice_clipping_enabled: bool = False
+    voice_triggers: list = field(default_factory=default_voice_triggers)
+
     def __post_init__(self):
         if not self.save_dir:
             self.save_dir = default_save_dir()
+        if not self.voice_triggers:
+            self.voice_triggers = default_voice_triggers()
 
     @classmethod
     def load(cls) -> "Settings":
@@ -56,9 +70,16 @@ class Settings:
         with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
             json.dump(asdict(self), f, indent=2)
 
+    def max_buffer_duration(self) -> int:
+        durations = [self.clip_length]
+        if self.voice_clipping_enabled:
+            for t in self.voice_triggers:
+                if t.get("enabled", True):
+                    durations.append(int(t.get("duration", 30)))
+        return max(durations)
+
     def video_restart_key(self):
         return (self.resolution, self.fps, self.monitor)
 
     def audio_restart_key(self):
-        return (self.system_audio, self.mic_audio)
-
+        return (self.system_audio, self.mic_audio, self.voice_clipping_enabled)

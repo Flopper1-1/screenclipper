@@ -8,14 +8,33 @@ from datetime import datetime
 
 import cv2
 import mss
-from PySide6.QtCore import Qt, QTimer, QSize
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QKeySequence, QPixmap
-from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
-    QAbstractButton, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout,
-    QKeySequenceEdit, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
-    QScrollArea, QSlider, QSpinBox, QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget,
-    QGridLayout, QMenu)
+    QAbstractButton,
+    QButtonGroup,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QKeySequenceEdit,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSlider,
+    QSpinBox,
+    QStackedWidget,
+    QSystemTrayIcon,
+    QVBoxLayout,
+    QWidget,
+)
 
 from hotkeys import parse_hotkey
 from icon import make_icon
@@ -138,8 +157,12 @@ class DashboardPage(QWidget):
         grid = QGridLayout()
         grid.setSpacing(14)
         self.stat_len, self.stat_res, self.stat_fps, self.stat_mem = (label("-", "stat") for _ in range(4))
-        for i, (title, w) in enumerate([("Clip length", self.stat_len), ("Resolution", self.stat_res),
-                                        ("Capture FPS", self.stat_fps), ("Buffer memory", self.stat_mem)]):
+        for i, (title, w) in enumerate([
+            ("Clip length", self.stat_len),
+            ("Resolution", self.stat_res),
+            ("Capture FPS", self.stat_fps),
+            ("Buffer memory", self.stat_mem),
+        ]):
             sc = card()
             sl = QVBoxLayout(sc)
             sl.setContentsMargins(18, 14, 18, 14)
@@ -148,17 +171,21 @@ class DashboardPage(QWidget):
             grid.addWidget(sc, 0, i)
         lay.addLayout(grid)
 
-        # hotkeys
+        # hotkeys & voice row
         hk = card()
         hl = QHBoxLayout(hk)
         hl.setContentsMargins(24, 16, 24, 16)
         hl.addWidget(label("Save clip", "muted"))
         self.chip_save = label("", "chip")
         hl.addWidget(self.chip_save)
-        hl.addSpacing(24)
-        hl.addWidget(label("Pause / resume buffer", "muted"))
+        hl.addSpacing(20)
+        hl.addWidget(label("Pause / resume", "muted"))
         self.chip_toggle = label("", "chip")
         hl.addWidget(self.chip_toggle)
+        hl.addSpacing(20)
+        hl.addWidget(label("Voice trigger", "muted"))
+        self.chip_voice = label("", "chip")
+        hl.addWidget(self.chip_voice)
         hl.addStretch()
         self.pause_btn = QPushButton("Pause buffer")
         self.pause_btn.clicked.connect(win.toggle_pause)
@@ -220,6 +247,13 @@ class DashboardPage(QWidget):
         self.stat_mem.setText(human_size(svc.buffer.size_bytes()))
         self.chip_save.setText(pretty_key(s.save_hotkey))
         self.chip_toggle.setText(pretty_key(s.toggle_hotkey))
+
+        if s.voice_clipping_enabled:
+            active_count = sum(1 for t in s.voice_triggers if t.get("enabled", True))
+            self.chip_voice.setText(f"🎙 Active ({active_count})")
+        else:
+            self.chip_voice.setText("🎙 Disabled")
+
         self.pause_btn.setText("Resume buffer" if svc.paused else "Pause buffer")
         self.save_btn.setEnabled(not svc.saving)
 
@@ -255,10 +289,12 @@ class ClipRow(QFrame):
         info.addWidget(p)
         info.addStretch()
         btns = QHBoxLayout()
-        for text, fn, obj in (("Play", lambda: os.startfile(path), None),
-                              ("Show in Explorer", lambda: show_in_explorer(path), None),
-                              ("Copy path", self._copy, None),
-                              ("Delete", self._delete, "danger")):
+        for text, fn, obj in (
+            ("Play", lambda: os.startfile(path), None),
+            ("Show in Explorer", lambda: show_in_explorer(path), None),
+            ("Copy path", self._copy, None),
+            ("Delete", self._delete, "danger"),
+        ):
             b = QPushButton(text)
             if obj:
                 b.setObjectName(obj)
@@ -298,8 +334,7 @@ class ClipRow(QFrame):
         self.page.win.flash("Path copied to clipboard")
 
     def _delete(self):
-        if QMessageBox.question(self, "Delete clip", f"Permanently delete\n{os.path.basename(self.path)}?") \
-                == QMessageBox.Yes:
+        if QMessageBox.question(self, "Delete clip", f"Permanently delete\n{os.path.basename(self.path)}?") == QMessageBox.Yes:
             try:
                 os.remove(self.path)
                 tp = thumb_path_for(self.path)
@@ -357,7 +392,7 @@ class ClipsPage(QWidget):
             files = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith(".mp4")]
         files.sort(key=os.path.getmtime, reverse=True)
         if not files:
-            empty = label("No clips yet. Press your save hotkey while something is on screen.", "muted")
+            empty = label("No clips yet. Press your save hotkey or say a voice phrase while something is on screen.", "muted")
             empty.setAlignment(Qt.AlignCenter)
             self.inner_lay.addWidget(empty)
         for f in files[:80]:
@@ -394,6 +429,7 @@ class SettingsPage(QWidget):
     def __init__(self, win):
         super().__init__()
         self.win = win
+        self._voice_triggers = []
         outer = QVBoxLayout(self)
         outer.setContentsMargins(32, 28, 32, 20)
         head = QHBoxLayout()
@@ -442,7 +478,7 @@ class SettingsPage(QWidget):
             for i, m in enumerate(sct.monitors[1:], start=1):
                 self.monitor.addItem(f"Monitor {i}  ({m['width']}×{m['height']})", i)
         cv.addLayout(row("Monitor", self.monitor))
-        note = label("Longer clips, higher resolution and higher FPS use more memory (see Dashboard).", "muted")
+        note = label("Hardware-accelerated encoding (AMD AMF / NVIDIA NVENC / Intel QSV) is auto-detected.", "muted")
         note.setWordWrap(True)
         cv.addWidget(note)
         v.addWidget(c)
@@ -457,12 +493,44 @@ class SettingsPage(QWidget):
         cv.addLayout(row("Pause / resume buffer", self.hk_toggle))
         v.addWidget(c)
 
+        # voice clipping
+        c, cv = section("Voice Clipping", "Say a phrase into your microphone to automatically save a clip.")
+        self.cb_voice = QCheckBox("Enable voice clipping triggers")
+        cv.addWidget(self.cb_voice)
+
+        self.voice_status_lbl = label("Status: Initializing...", "muted")
+        cv.addWidget(self.voice_status_lbl)
+
+        cv.addWidget(label("Active Voice Clippings:", "h2"))
+        self.triggers_layout = QVBoxLayout()
+        self.triggers_layout.setSpacing(6)
+        cv.addLayout(self.triggers_layout)
+
+        # Add new trigger row
+        add_frame = QFrame()
+        add_frame.setStyleSheet("background: #11141a; border-radius: 8px; padding: 6px;")
+        add_lay = QHBoxLayout(add_frame)
+        add_lay.setContentsMargins(6, 4, 6, 4)
+        self.add_phrase_input = QLineEdit()
+        self.add_phrase_input.setPlaceholderText("New trigger phrase (e.g. clip that, what a shot)...")
+        self.add_dur_spin = QSpinBox()
+        self.add_dur_spin.setRange(5, 300)
+        self.add_dur_spin.setValue(30)
+        self.add_dur_spin.setSuffix(" s")
+        btn_add_trigger = QPushButton("+ Add Voice Trigger")
+        btn_add_trigger.clicked.connect(self._add_trigger)
+        add_lay.addWidget(self.add_phrase_input, 1)
+        add_lay.addWidget(self.add_dur_spin)
+        add_lay.addWidget(btn_add_trigger)
+        cv.addWidget(add_frame)
+        v.addWidget(c)
+
         # audio
         c, cv = section("Audio")
         self.sys_on = QCheckBox("Record system audio (game / desktop sound)")
         self.sys_vol = QSlider(Qt.Horizontal)
         self.sys_vol.setRange(0, 200)
-        self.mic_on = QCheckBox("Record microphone")
+        self.mic_on = QCheckBox("Record microphone in saved clip")
         self.mic_vol = QSlider(Qt.Horizontal)
         self.mic_vol.setRange(0, 200)
         cv.addWidget(self.sys_on)
@@ -524,6 +592,70 @@ class SettingsPage(QWidget):
         if d:
             self.folder.setText(os.path.normpath(d))
 
+    def _render_triggers(self):
+        while self.triggers_layout.count():
+            item = self.triggers_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not self._voice_triggers:
+            empty = label("No voice trigger phrases configured. Add one below.", "muted")
+            self.triggers_layout.addWidget(empty)
+            return
+
+        for idx, trigger in enumerate(self._voice_triggers):
+            row_frame = QFrame()
+            row_frame.setStyleSheet("background: #151922; border-radius: 8px; border: 1px solid #232a3d;")
+            rl = QHBoxLayout(row_frame)
+            rl.setContentsMargins(10, 6, 10, 6)
+            rl.setSpacing(12)
+
+            cb = QCheckBox(f'💬 "{trigger.get("phrase", "")}"')
+            cb.setChecked(trigger.get("enabled", True))
+
+            def on_toggle(checked, i=idx):
+                self._voice_triggers[i]["enabled"] = checked
+
+            cb.toggled.connect(on_toggle)
+            rl.addWidget(cb, 1)
+
+            dur_spin = QSpinBox()
+            dur_spin.setRange(5, 300)
+            dur_spin.setValue(int(trigger.get("duration", 30)))
+            dur_spin.setSuffix(" s")
+
+            def on_dur(val, i=idx):
+                self._voice_triggers[i]["duration"] = val
+
+            dur_spin.valueChanged.connect(on_dur)
+            rl.addWidget(dur_spin)
+
+            btn_del = QPushButton("✕ Remove")
+            btn_del.setObjectName("danger")
+
+            def on_del(i=idx):
+                self._voice_triggers.pop(i)
+                self._render_triggers()
+
+            btn_del.clicked.connect(on_del)
+            rl.addWidget(btn_del)
+
+            self.triggers_layout.addWidget(row_frame)
+
+    def _add_trigger(self):
+        phrase = self.add_phrase_input.text().strip().lower()
+        if not phrase:
+            self.msg.setText("⚠ Please enter a phrase first.")
+            return
+        if any(t.get("phrase", "").strip().lower() == phrase for t in self._voice_triggers):
+            self.msg.setText("⚠ This phrase is already in the list.")
+            return
+        duration = self.add_dur_spin.value()
+        self._voice_triggers.append({"phrase": phrase, "duration": duration, "enabled": True})
+        self.add_phrase_input.clear()
+        self._render_triggers()
+        self.msg.setText("✓ Added voice trigger")
+
     def load(self):
         s = self.win.settings
         self.length.setValue(s.clip_length)
@@ -534,6 +666,9 @@ class SettingsPage(QWidget):
         self.monitor.setCurrentIndex(max(0, self.monitor.findData(s.monitor)))
         self.hk_save.setKeySequence(QKeySequence(s.save_hotkey))
         self.hk_toggle.setKeySequence(QKeySequence(s.toggle_hotkey))
+        self.cb_voice.setChecked(s.voice_clipping_enabled)
+        self._voice_triggers = [dict(t) for t in s.voice_triggers]
+        self._render_triggers()
         self.sys_on.setChecked(s.system_audio)
         self.sys_vol.setValue(s.system_volume)
         self.mic_on.setChecked(s.mic_audio)
@@ -566,6 +701,8 @@ class SettingsPage(QWidget):
         s.quality = self.quality.currentText()
         s.monitor = self.monitor.currentData() or 1
         s.save_hotkey, s.toggle_hotkey = save_hk, tog_hk
+        s.voice_clipping_enabled = self.cb_voice.isChecked()
+        s.voice_triggers = [dict(t) for t in self._voice_triggers]
         s.system_audio, s.system_volume = self.sys_on.isChecked(), self.sys_vol.value()
         s.mic_audio, s.mic_volume = self.mic_on.isChecked(), self.mic_vol.value()
         s.save_dir = self.folder.text().strip() or s.save_dir
@@ -584,8 +721,8 @@ class MainWindow(QMainWindow):
         self.set_autostart = set_autostart
         self.setWindowTitle("Screen Clipper")
         self.setWindowIcon(make_icon())
-        self.resize(1040, 720)
-        self.setMinimumSize(900, 620)
+        self.resize(1060, 740)
+        self.setMinimumSize(920, 640)
         self._quitting = False
 
         root = QWidget()
@@ -608,8 +745,11 @@ class MainWindow(QMainWindow):
         self.clips = ClipsPage(self)
         self.settings_page = SettingsPage(self)
         group = QButtonGroup(self)
-        for i, (text, page) in enumerate([("  🏠   Dashboard", self.dashboard), ("  🎞   Clips", self.clips),
-                                          ("  ⚙   Settings", self.settings_page)]):
+        for i, (text, page) in enumerate([
+            ("  🏠   Dashboard", self.dashboard),
+            ("  🎞   Clips", self.clips),
+            ("  ⚙   Settings", self.settings_page),
+        ]):
             b = QPushButton(text)
             b.setObjectName("nav")
             b.setCheckable(True)
@@ -645,6 +785,8 @@ class MainWindow(QMainWindow):
 
         service.clip_saved.connect(self.on_saved)
         service.clip_failed.connect(self.on_failed)
+        service.voice_triggered.connect(self.on_voice_triggered)
+        service.voice.status_changed.connect(self.settings_page.voice_status_lbl.setText)
         hotkeys.triggered.connect(self.on_hotkey)
         hotkeys.failed.connect(lambda m: self.flash("⚠ " + m))
 
@@ -689,6 +831,14 @@ class MainWindow(QMainWindow):
         elif name == "toggle":
             self.toggle_pause()
 
+    def on_voice_triggered(self, phrase, duration):
+        msg = f"🎙️ Voice Trigger: \"{phrase}\" ({duration}s)"
+        self.flash(msg)
+        if self.settings.sound:
+            threading.Thread(target=lambda: winsound.Beep(1200, 150), daemon=True).start()
+        if self.settings.notify:
+            self.tray.showMessage("Screen Clipper Voice Trigger", msg, QSystemTrayIcon.Information, 4000)
+
     def on_saved(self, path):
         self.dashboard.set_last(path)
         self.flash("Clip saved")
@@ -730,6 +880,9 @@ class MainWindow(QMainWindow):
             self.hide()
             if not getattr(self, "_told", False):
                 self._told = True
-                self.tray.showMessage("Screen Clipper is still running",
-                                      f"Press {self.settings.save_hotkey} to save a clip. Quit from the tray icon.",
-                                      QSystemTrayIcon.Information, 4000)
+                self.tray.showMessage(
+                    "Screen Clipper is still running",
+                    f"Press {self.settings.save_hotkey} to save a clip. Quit from the tray icon.",
+                    QSystemTrayIcon.Information,
+                    4000,
+                )

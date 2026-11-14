@@ -17,6 +17,10 @@ node_modules/
 showcase/node_modules/
 .remotion/
 
+# Models & Large Binaries
+model/
+*.zip
+
 # App Data & Runtime generated
 settings.json
 thumbs/
